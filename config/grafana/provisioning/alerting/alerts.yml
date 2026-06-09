@@ -1,0 +1,83 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: Application Alerts
+    folder: Observability
+    interval: 1m
+    rules:
+      - uid: app-high-error-rate
+        title: "CRITICAL - High Error Rate"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 60
+              to: 0
+            datasourceUid: prometheus
+            model:
+              datasource:
+                type: prometheus
+                uid: prometheus
+              expr: rate(app_errors_total[1m]) * 60
+              instant: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 60
+              to: 0
+            datasourceUid: "-100"
+            model:
+              datasource:
+                name: Expression
+                type: __expr__
+                uid: "-100"
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: B
+              type: reduce
+              reducer: last
+              settings:
+                mode: ""
+          - refId: C
+            relativeTimeRange:
+              from: 60
+              to: 0
+            datasourceUid: "-100"
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 5
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                name: Expression
+                type: __expr__
+                uid: "-100"
+              expression: B
+              hide: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: NoData
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: "CRITICAL: Application error rate exceeded 5 per minute"
+          description: "Error rate has exceeded the 5 errors/min threshold. Immediate action required."
+        labels:
+          severity: critical
+        isPaused: false

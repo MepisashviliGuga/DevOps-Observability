@@ -1,0 +1,85 @@
+services:
+  app:
+    build: ./src
+    container_name: observability-app
+    ports:
+      - "3000:3000"
+    volumes:
+      - app-logs:/app/logs
+    networks:
+      - observability
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./config/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - observability
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./config/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/loki-config.yml
+    networks:
+      - observability
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: promtail
+    volumes:
+      - ./config/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - app-logs:/var/log/app:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - observability
+    depends_on:
+      - loki
+      - app
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_UNIFIED_ALERTING_ENABLED=true
+      - GF_ALERTING_ENABLED=false
+    networks:
+      - observability
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+networks:
+  observability:
+    driver: bridge
+
+volumes:
+  app-logs:
+  prometheus-data:
+  loki-data:
+  grafana-data:

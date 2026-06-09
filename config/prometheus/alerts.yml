@@ -1,0 +1,12 @@
+groups:
+  - name: app_alerts
+    interval: 30s
+    rules:
+      - alert: HighErrorRate
+        expr: rate(app_errors_total[1m]) * 60 > 5
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRITICAL: Application error rate exceeded threshold"
+          description: "Error rate is {{ $value | printf \"%.2f\" }} errors/min (threshold: 5 errors/min)"
