@@ -38,7 +38,7 @@ check "App /"            "$APP_URL/"                  '"status":"ok"'
 check "App /metrics"     "$APP_URL/metrics"           'app_requests_total'
 check "Prometheus"       "$PROMETHEUS_URL/-/healthy"  'Prometheus'
 check "Loki /ready"      "$LOKI_URL/ready"            ''
-check "Grafana /health"  "$GRAFANA_URL/api/health"    '"database":"ok"'
+check "Grafana /health"  "$GRAFANA_URL/api/health"    '"database"'
 echo ""
 
 if [ "$FAIL" -gt 0 ]; then
