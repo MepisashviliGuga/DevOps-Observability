@@ -1,86 +1,127 @@
-# DevOps Observability Lab
+# DevOps Observability — Final Project
 
-A complete, single-command observability stack for a containerized Node.js service. It combines metrics collection, log aggregation, dashboards, and automated alerting using industry-standard open-source tools.
+A production-ready observability stack for a containerized Node.js service, extended with security automation, CI/CD, reliability improvements, and fully automated environment setup.
 
-| Concern        | Tool                  |
-|----------------|-----------------------|
-| Metrics        | Prometheus            |
-| Visualization  | Grafana               |
-| Logging        | Loki + Promtail       |
-| Instrumentation| Node.js + prom-client |
-| Orchestration  | Docker Compose        |
+| Concern              | Tool                              |
+|----------------------|-----------------------------------|
+| Metrics              | Prometheus                        |
+| Visualization        | Grafana                           |
+| Logging              | Loki + Promtail                   |
+| Instrumentation      | Node.js + prom-client             |
+| Orchestration        | Docker Compose                    |
+| CI/CD                | GitHub Actions                    |
+| Dependency scanning  | npm audit + Trivy                 |
+| Container scanning   | Trivy                             |
+| Secrets scanning     | Gitleaks                          |
+| Dockerfile linting   | Hadolint                          |
+| IaC scanning         | Trivy config                      |
+
+---
 
 ## Project Structure
 
 ```
-Devops-observability/
-├── docker-compose.yml          # One-command deployment of the whole stack
-├── README.md
-├── src/                        # Instrumented Node.js application
-│   ├── index.js                # /, /error, /metrics endpoints + JSON logger
-│   ├── package.json
-│   └── Dockerfile
-├── config/                     # All stack configuration, grouped by tool
+devops-observability/
+├── .github/
+│   └── workflows/
+│       ├── ci.yml            # Main CI: lint, audit, scan, integration tests
+│       └── security.yml      # Scheduled weekly security scans
+├── config/
 │   ├── prometheus/
-│   │   ├── prometheus.yml       # Scrape targets
-│   │   └── alerts.yml           # CRITICAL error-rate rule
+│   │   ├── prometheus.yml    # Scrape targets (app + prometheus self-scrape)
+│   │   └── alerts.yml        # Alert rules: error rate, service down, memory
 │   ├── loki/
-│   │   └── loki-config.yml
+│   │   └── loki-config.yml   # Loki single-instance config
 │   ├── promtail/
-│   │   └── promtail-config.yml  # Tails JSON logs, parses fields into labels
+│   │   └── promtail-config.yml  # Tails volume log, parses JSON → Loki labels
 │   └── grafana/
-│       └── provisioning/        # Auto-provisioned on first boot
-│           ├── datasources/     # Prometheus + Loki data sources
-│           ├── dashboards/      # Custom metrics dashboard
-│           └── alerting/        # Grafana-managed alert rule
-└── docs/
-    └── images/                  # Evidence screenshots
+│       └── provisioning/
+│           ├── datasources/  # Prometheus + Loki auto-provisioned
+│           ├── dashboards/   # Custom metrics dashboard
+│           └── alerting/     # Grafana-managed alert rule (error rate)
+├── docs/
+│   ├── incident-response.md  # Incident runbook + SLO table
+│   └── images/               # Evidence screenshots
+├── scripts/
+│   ├── setup.sh              # Linux/Mac: single-command setup
+│   ├── setup.ps1             # Windows: single-command setup
+│   ├── validate.sh           # Post-deploy endpoint validation
+│   ├── validate.ps1          # Windows version of validate
+│   └── rollback.sh           # Rollback to any git ref
+├── src/
+│   ├── index.js              # Express app: /, /error, /health, /metrics
+│   ├── package.json
+│   ├── Dockerfile            # Non-root user, HEALTHCHECK, wget
+│   └── .dockerignore
+├── .env.example              # Environment variable template
+├── .gitignore
+├── .hadolint.yaml            # Hadolint rule config
+├── docker-compose.yml        # Full stack: healthchecks, resource limits, .env
+└── Makefile                  # Common operations: make up/down/validate/security-scan
 ```
 
-The layout separates the three responsibilities cleanly: application code lives in `src/`, every piece of stack configuration lives under `config/<tool>/`, and documentation assets live in `docs/`.
+---
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Docker Network (observability)                     │
-│                                                                       │
-│  ┌──────────────────┐  scrape /metrics  ┌───────────────────────┐    │
-│  │   Node.js App    │◄──────────────────│      Prometheus       │    │
-│  │   (port 3000)    │     every 15s     │      (port 9090)      │    │
-│  │                  │                   └───────────┬───────────┘    │
-│  │  GET /           │                               │ query metrics  │
-│  │  GET /error      │               ┌───────────────▼───────────┐    │
-│  │  GET /metrics    │◄── browser    │         Grafana           │    │
-│  └────────┬─────────┘               │        (port 3001)        │    │
-│           │ JSON logs               └───────────────────────────┘    │
-│           ▼ (stdout + volume)                     ▲                   │
-│  ┌──────────────────┐  tail *.log ┌───────────────┴────────────┐     │
-│  │   app-logs       │◄────────────│         Promtail           │     │
-│  │  Docker Volume   │             └───────────────┬────────────┘     │
-│  └──────────────────┘                             │ push             │
-│                                   ┌───────────────▼────────────┐     │
-│                                   │            Loki            │     │
-│                                   │        (port 3100)         │     │
-│                                   └───────────────────────────┘      │
+│                    Docker Network (observability)                    │
+│                                                                      │
+│  ┌──────────────────┐  scrape /metrics  ┌──────────────────────┐   │
+│  │   Node.js App    │◄──────────────────│      Prometheus      │   │
+│  │   (port 3000)    │     every 15s     │      (port 9090)     │   │
+│  │                  │                   └──────────┬───────────┘   │
+│  │  GET /           │                              │ query          │
+│  │  GET /error      │              ┌───────────────▼──────────┐    │
+│  │  GET /health     │◄── browser   │         Grafana          │    │
+│  │  GET /metrics    │              │        (port 3001)       │    │
+│  └────────┬─────────┘              └──────────────────────────┘    │
+│           │ JSON logs                            ▲                  │
+│           ▼ (shared Docker volume)               │                  │
+│  ┌──────────────────┐  tail *.log  ┌────────────┴─────────────┐   │
+│  │   app-logs       │◄─────────────│         Promtail         │   │
+│  │  Docker Volume   │              └────────────┬─────────────┘   │
+│  └──────────────────┘                           │ push             │
+│                                  ┌──────────────▼─────────────┐   │
+│                                  │            Loki             │   │
+│                                  │        (port 3100)          │   │
+│                                  └─────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 **Data flow**
+- **Metrics:** App exposes `/metrics`; Prometheus scrapes every 15 s; Grafana queries Prometheus for dashboards and alert evaluation.
+- **Logs:** App writes JSON to a shared Docker volume; Promtail tails it, parses fields into Loki labels; Grafana Explore queries Loki.
+- **Alerts:** Prometheus evaluates rules continuously; Grafana Alerting fires when thresholds are crossed.
 
-- **Metrics:** the app exposes `/metrics`; Prometheus pulls it every 15s; Grafana queries Prometheus for dashboards and alert evaluation.
-- **Logs:** the app writes one JSON object per line to a shared Docker volume; Promtail tails the file, parses the JSON, and pushes labeled streams to Loki; Grafana queries Loki in Explore.
-- **Alerts:** the error-rate rule is evaluated continuously; when the rate crosses the threshold the alert moves to Firing and appears in Grafana Alerting and Prometheus.
+---
 
 ## Quick Start
 
-The entire system deploys with a single command:
+### Option A — Automated setup (recommended)
 
+**Linux / macOS / Git Bash:**
 ```bash
-docker compose up --build -d
+bash scripts/setup.sh
 ```
 
-Wait roughly 30 seconds for all services to become healthy, then open:
+**Windows (PowerShell):**
+```powershell
+.\scripts\setup.ps1
+```
+
+The script checks prerequisites, creates `.env` from the template, starts the stack, waits for health, and validates all endpoints.
+
+### Option B — Manual
+
+```bash
+cp .env.example .env            # 1. create config
+docker compose up --build -d    # 2. start stack
+bash scripts/validate.sh        # 3. verify
+```
+
+### Service URLs
 
 | Service    | URL                     | Credentials   |
 |------------|-------------------------|---------------|
@@ -89,49 +130,165 @@ Wait roughly 30 seconds for all services to become healthy, then open:
 | Prometheus | http://localhost:9090   | none          |
 | Loki API   | http://localhost:3100   | none          |
 
-To tear everything down (including volumes):
+### Tear down
 
 ```bash
-docker compose down -v
+docker compose down      # stop containers, keep volumes
+docker compose down -v   # stop and delete all volumes
 ```
 
-> **First-boot note:** if the Grafana alert rule shows an error immediately after startup, run `docker compose restart grafana`. This guarantees the "Observability" folder exists before the alert rule is registered.
+---
 
-## Instrumentation
+## CI/CD Pipeline
 
-The service in `src/index.js` exposes three endpoints and two custom Prometheus counters:
+The GitHub Actions pipeline runs on every push to `main` or `develop` and on every pull request targeting `main`.
 
-| Endpoint   | Purpose                                   | Counters incremented            |
-|------------|-------------------------------------------|---------------------------------|
-| `GET /`    | Healthy request                           | `app_requests_total`            |
-| `GET /error` | Simulated failure (HTTP 500)            | `app_requests_total`, `app_errors_total` |
-| `GET /metrics` | Prometheus exposition format          | none                            |
+```
+Push / PR
+    │
+    ├─── lint-and-audit ────────────────────────────────────────┐
+    │    • npm audit (fail on critical vulnerabilities)         │
+    │    • Hadolint Dockerfile lint (fail on errors)            │
+    │                                                           │
+    ├─── secrets-scan ──────────────────────────────────────────┤
+    │    • Gitleaks full-history scan                           │
+    │                                                           │
+    ├─── build-and-scan (needs: lint-and-audit) ────────────────┤
+    │    • docker build                                         │
+    │    • Trivy image scan → SARIF uploaded to GitHub Security │
+    │    • Table report printed in CI logs                      │
+    │                                                           │
+    └─── integration-test (needs: build-and-scan, secrets-scan) ┘
+         • cp .env.example .env
+         • docker compose up --build -d
+         • Wait for /health
+         • Smoke tests: /health, /, /error (500), /metrics,
+           Prometheus scrapes app metrics
+         • docker compose down -v
+```
 
-Every request also emits a structured JSON log line containing `timestamp`, `level`, `message`, `endpoint`, `method`, and `status`.
+A second workflow (`security.yml`) runs **every Monday at 02:00 UTC** and on manual dispatch:
+- Trivy filesystem scan (CRITICAL/HIGH/MEDIUM)
+- Trivy IaC / config scan (`docker-compose.yml`, configs)
+- Full `npm audit` report
+- Gitleaks secrets scan
 
-## Implementation Details
+---
 
-### Logging Strategy
+## Security Implementation
 
-This lab uses **structured JSON logging** shipped through the **Promtail + Loki** pipeline:
+### 1. Dependency Vulnerability Scanning
 
-- The Node.js app writes each log entry as a single-line JSON object to both **stdout** and a file inside a shared Docker named volume (`app-logs` mounted at `/app/logs/app.log`).
-- **Promtail** mounts the same volume read-only, tails `*.log`, and ships every line to Loki. A pipeline stage parses the JSON and promotes `level` and `endpoint` into indexed Loki labels.
-- **Loki** stores the raw log lines compressed on disk, indexed only by labels. This keeps storage small while keeping label-based queries fast.
-- **Grafana Explore** (Loki data source) runs filtered queries such as `{service="app", level="error"}` in real time.
+`npm audit --audit-level=critical` runs in CI on every push. Exits non-zero only for critical vulnerabilities, so the build fails fast on exploitable issues without noise from low-severity advisories.
 
-The file-and-volume approach (rather than reading the Docker socket) keeps the setup fully cross-platform across Linux, macOS, and Windows Docker Desktop.
+### 2. Container Image Scanning (Trivy)
 
-### Triggering the CRITICAL Alert
+Trivy scans the built Docker image for OS-level and application-level CVEs before the integration test stage runs. Results are uploaded as SARIF to the GitHub Security tab, and a human-readable table is printed in CI logs.
 
-The alert fires when the error rate exceeds **5 errors per minute**, expressed as `rate(app_errors_total[1m]) * 60 > 5`.
+### 3. Dockerfile Linting (Hadolint)
 
-**1. Confirm the stack is running:**
+Hadolint enforces Dockerfile best practices:
+- No `latest` tags on base images
+- `COPY` preferred over `ADD`
+- Non-root user enforced (`USER appuser`)
+- `npm cache clean --force` after install to reduce image size
+
+### 4. Secrets Scanning (Gitleaks)
+
+Gitleaks scans the full git history on every push and PR. It also runs in the weekly scheduled workflow. `.env` files are excluded from version control via `.gitignore`; `.env.example` contains only placeholder values.
+
+### 5. IaC / Config Scanning (Trivy config)
+
+Trivy's config scanner audits `docker-compose.yml` and config files for misconfigurations (e.g., privileged containers, missing resource limits, exposed secrets).
+
+### 6. Non-Root Container
+
+The app Dockerfile creates a dedicated `appuser` and switches to it before the `CMD`. The container never runs as root.
+
+### 7. Secrets Management
+
+Environment variables are loaded from `.env` (gitignored). `.env.example` provides the template with safe defaults. In production, swap the `.env` approach for a secrets manager (HashiCorp Vault, AWS Secrets Manager, etc.).
+
+---
+
+## Monitoring & Logging
+
+### Prometheus Metrics
+
+The app exposes:
+
+| Metric                         | Type      | Description                          |
+|--------------------------------|-----------|--------------------------------------|
+| `app_requests_total`           | Counter   | Total HTTP requests received         |
+| `app_errors_total`             | Counter   | Total HTTP 500 responses             |
+| `app_http_duration_seconds`    | Histogram | Request duration by route and status |
+| Default Node.js process metrics| Various   | Memory, CPU, event-loop lag          |
+
+### Alert Rules
+
+| Alert                      | Severity | Condition                                          |
+|----------------------------|----------|----------------------------------------------------|
+| `HighErrorRate`            | critical | `rate(app_errors_total[1m]) * 60 > 5`             |
+| `AppDown`                  | critical | `up{job="app"} == 0` for 1 m                      |
+| `HighMemoryUsage`          | warning  | Process RSS > 200 MB for 2 m                      |
+| `PrometheusTargetDown`     | warning  | Any scrape target unreachable for 2 m             |
+| `PrometheusConfigReloadFailed` | warning | Config reload failing for 5 m                  |
+
+### Structured JSON Logging
+
+Every request emits a JSON log line: `{ timestamp, level, message, endpoint, method, status }`. Promtail tails the file, parses the JSON, and promotes `level` and `endpoint` into Loki labels, enabling queries like:
+
+```
+{service="app", level="error"}
+```
+
+---
+
+## Reliability Improvements
+
+### Health Checks
+
+- **App** exposes `GET /health` returning `{ status, uptime, memory, timestamp }`.
+- All Docker Compose services define `healthcheck:` blocks. `depends_on` uses `condition: service_healthy` so services only start after their dependencies pass.
+
+### Resource Limits
+
+Each service has `deploy.resources.limits` preventing any single container from starving the host:
+
+| Service    | Memory | CPU  |
+|------------|--------|------|
+| app        | 256 MB | 0.5  |
+| prometheus | 512 MB | 0.5  |
+| loki       | 256 MB | 0.25 |
+| promtail   | 128 MB | 0.25 |
+| grafana    | 256 MB | 0.5  |
+
+### Rollback Procedure
+
 ```bash
-docker compose ps
+# Roll back to any git ref (tag, commit SHA, HEAD~1)
+bash scripts/rollback.sh HEAD~1
+bash scripts/rollback.sh v1.0.0
 ```
 
-**2. Send a burst of errors:**
+The script: brings the stack down → checks out the target ref → rebuilds → waits for health → runs `validate.sh`.
+
+### Incident Response
+
+See [`docs/incident-response.md`](docs/incident-response.md) for runbooks covering:
+- High error rate
+- Container down
+- Grafana unreachable
+- Log gap (Loki/Promtail)
+
+---
+
+## Triggering the CRITICAL Alert
+
+```bash
+# Send 20 errors in quick succession
+for i in {1..20}; do curl -s http://localhost:3000/error > /dev/null; done
+```
 
 PowerShell:
 ```powershell
@@ -140,49 +297,33 @@ for ($i = 0; $i -lt 20; $i++) {
 }
 ```
 
-Bash / Git Bash:
+Then open **Grafana → Alerting → Alert rules** — the `CRITICAL - High Error Rate` rule turns Firing within 30 seconds.
+
+---
+
+## Make Targets
+
 ```bash
-for i in {1..20}; do curl -s http://localhost:3000/error > /dev/null; done
+make setup          # first-run: copy .env, build, start, validate
+make up             # docker compose up --build -d
+make down           # docker compose down
+make clean          # docker compose down -v
+make logs           # docker compose logs -f
+make status         # docker compose ps
+make health         # pretty-print /health JSON
+make validate       # run scripts/validate.sh
+make security-scan  # npm audit + Hadolint + Trivy (local)
 ```
 
-**3. Watch it fire:**
-- Grafana: **Alerting → Alert rules**, the rule "CRITICAL - High Error Rate" turns **Firing**.
-- Prometheus: http://localhost:9090/alerts shows the rule active.
-
-**4. Watch it resolve:**
-- Stop sending requests; after about a minute the rate drops below the threshold and the alert returns to **Normal**.
+---
 
 ## Evidence
 
-### 1. Grafana dashboard with custom application metrics
+### Grafana dashboard with application metrics
 ![Grafana Dashboard](./docs/images/grafana-dashboard.png)
 
-### 2. Loki log analysis showing filtered JSON logs
+### Loki log analysis with filtered JSON logs
 ![Loki Logs](./docs/images/loki-logs.png)
 
-### 3. Grafana Alerting tab with the active alert rule
+### Grafana Alerting tab with active alert rule
 ![Alert Rule](./docs/images/grafana-alert.png)
-
-## Analysis
-
-### Why is JSON-structured logging more efficient than plain text?
-
-JSON logging stores each entry as a machine-parseable set of key-value fields rather than a free-form string. Aggregators such as Loki and Elasticsearch can therefore index or filter on specific fields (`level`, `endpoint`, `status`) without running expensive regular expressions at query time. Filtering becomes an exact match (`level="error"`) instead of a full-text scan, which is faster and more reliable as log volume grows. It also enables type-aware, field-level filtering in Grafana with no additional parsing configuration, and it makes logs trivial to forward into other systems that expect structured input.
-
-### What is the fundamental difference between Prometheus (metrics) and Loki (logging)?
-
-**Prometheus** is a time-series database that **pulls** numeric samples from targets on a fixed interval. Each sample is a single float64 value tagged with labels and a timestamp; no free text is stored. It is built for mathematical aggregation (`rate()`, `histogram_quantile()`) and threshold-based alerting.
-
-**Loki** is a log aggregation system that **receives pushed** text events. It indexes only the labels attached to each log stream, not the content of the log lines, and stores the raw text compressed in chunks. It is built for full-text search and event correlation over time.
-
-The two are complementary: Prometheus tells you **that** something is wrong (error rate above 5 per minute), while Loki tells you **why** (the exact error and stack trace at that timestamp).
-
-### How would you handle long-term log retention (for example 6 months) without exhausting disk?
-
-Three complementary strategies:
-
-1. **Retention policies.** Enable Loki's compactor with `retention_enabled: true` and `retention_period: 4320h` (180 days). The compactor garbage-collects chunks older than the window on a schedule, so disk usage stays bounded.
-
-2. **Tiered object storage.** Replace Loki's local filesystem backend with an S3-compatible store (AWS S3, GCS, or MinIO) and move older chunks there automatically. Object storage costs roughly 10 to 20 times less per GB than local SSD and scales without manual intervention.
-
-3. **Log volume reduction.** Avoid logging every request at `DEBUG` in production. Use `INFO` and `WARN` for steady-state operations, rely on Prometheus counters for per-request metrics rather than log lines, and add Promtail `drop` stages to discard high-frequency low-value entries (such as health-check pings) before they reach Loki.

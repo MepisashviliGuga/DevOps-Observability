@@ -1,0 +1,140 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Stage 1: Dependency audit & Dockerfile lint ────────────────────────────
+  lint-and-audit:
+    name: Lint & Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: src
+
+      - name: Run npm audit (fail on critical)
+        run: npm audit --audit-level=critical
+        working-directory: src
+
+      - name: Lint Dockerfile with Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: src/Dockerfile
+          config: .hadolint.yaml
+          failure-threshold: error
+
+  # ── Stage 2: Secrets scanning ──────────────────────────────────────────────
+  secrets-scan:
+    name: Secrets Scan (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Stage 3: Build & container vulnerability scan ─────────────────────────
+  build-and-scan:
+    name: Build & Trivy Image Scan
+    runs-on: ubuntu-latest
+    needs: [lint-and-audit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t observability-app:${{ github.sha }} ./src
+
+      - name: Run Trivy image scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: observability-app:${{ github.sha }}
+          format: sarif
+          output: trivy-image.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+
+      - name: Upload Trivy SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Print Trivy table report
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: observability-app:${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+
+  # ── Stage 4: Integration / smoke tests ───────────────────────────────────
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [build-and-scan, secrets-scan]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env from example
+        run: cp .env.example .env
+
+      - name: Start full stack
+        run: docker compose up --build -d
+
+      - name: Wait for app to be healthy
+        run: |
+          echo "Waiting for app health check..."
+          timeout 90 bash -c 'until curl -sf http://localhost:3000/health > /dev/null 2>&1; do printf "."; sleep 3; done'
+          echo " App is healthy."
+
+      - name: Wait for Prometheus to be healthy
+        run: |
+          timeout 60 bash -c 'until curl -sf http://localhost:9090/-/healthy > /dev/null 2>&1; do sleep 3; done'
+          echo "Prometheus is healthy."
+
+      - name: Run smoke tests
+        run: |
+          echo "=== Smoke Tests ==="
+
+          echo -n "Testing /health endpoint... "
+          curl -sf http://localhost:3000/health | grep -q '"status":"healthy"' && echo "PASS" || (echo "FAIL" && exit 1)
+
+          echo -n "Testing / endpoint... "
+          curl -sf http://localhost:3000/ | grep -q '"status":"ok"' && echo "PASS" || (echo "FAIL" && exit 1)
+
+          echo -n "Testing /error returns 500... "
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/error)
+          [ "$STATUS" = "500" ] && echo "PASS" || (echo "FAIL - got $STATUS" && exit 1)
+
+          echo -n "Testing /metrics endpoint... "
+          curl -sf http://localhost:3000/metrics | grep -q 'app_requests_total' && echo "PASS" || (echo "FAIL" && exit 1)
+
+          echo -n "Testing Prometheus scrapes app metrics... "
+          sleep 20
+          curl -sf 'http://localhost:9090/api/v1/query?query=app_requests_total' | grep -q '"resultType":"vector"' && echo "PASS" || (echo "FAIL" && exit 1)
+
+          echo ""
+          echo "All smoke tests passed!"
+
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down -v

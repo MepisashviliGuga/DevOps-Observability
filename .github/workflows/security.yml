@@ -1,0 +1,79 @@
+name: Scheduled Security Scan
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'   # Every Monday at 02:00 UTC
+  workflow_dispatch:        # Allow manual trigger
+
+jobs:
+  filesystem-scan:
+    name: Trivy Filesystem Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy on repository filesystem
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+
+      - name: Upload filesystem scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-filesystem
+
+      - name: Print filesystem scan table
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH,MEDIUM
+
+  config-audit:
+    name: Docker Compose & Config Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml syntax
+        run: docker compose config --quiet && echo "docker-compose.yml syntax OK"
+
+      - name: Check for secrets in config files
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Trivy config scan (IaC)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: '0'
+
+  dependency-audit:
+    name: Node.js Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: src
+
+      - name: Full npm audit report
+        run: npm audit --audit-level=low || true
+        working-directory: src

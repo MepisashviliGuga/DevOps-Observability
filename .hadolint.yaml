@@ -1,0 +1,6 @@
+failure-threshold: error
+ignore:
+  - DL3008   # apt-get: pin versions — not applicable (using apk)
+  - DL3018   # apk: pin versions — acceptable for dev lab
+trustedRegistries:
+  - docker.io

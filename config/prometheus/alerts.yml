@@ -10,3 +10,42 @@ groups:
         annotations:
           summary: "CRITICAL: Application error rate exceeded threshold"
           description: "Error rate is {{ $value | printf \"%.2f\" }} errors/min (threshold: 5 errors/min)"
+
+      - alert: AppDown
+        expr: up{job="app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRITICAL: Application is unreachable"
+          description: "The observability-app target has been down for more than 1 minute."
+
+      - alert: HighMemoryUsage
+        expr: (process_resident_memory_bytes{job="app"} / 1024 / 1024) > 200
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WARNING: High memory usage"
+          description: "App memory usage is {{ $value | printf \"%.0f\" }} MB (threshold: 200 MB)"
+
+  - name: infrastructure_alerts
+    interval: 30s
+    rules:
+      - alert: PrometheusTargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WARNING: Scrape target {{ $labels.job }} is down"
+          description: "Target {{ $labels.instance }} (job: {{ $labels.job }}) has been unreachable for 2 minutes."
+
+      - alert: PrometheusConfigReloadFailed
+        expr: prometheus_config_last_reload_successful == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WARNING: Prometheus config reload failed"
+          description: "Prometheus configuration reload has been failing for 5 minutes."
