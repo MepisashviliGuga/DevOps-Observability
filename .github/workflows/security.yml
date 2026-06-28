@@ -7,41 +7,44 @@ on:
 
 jobs:
   filesystem-scan:
-    name: Trivy Filesystem Scan
+    name: Trivy Filesystem & Config Scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.28.0
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sudo sh -s -- -b /usr/local/bin
+          trivy --version
+
+      - name: Trivy filesystem scan
+        run: |
+          trivy fs \
+            --severity CRITICAL,HIGH,MEDIUM \
+            --exit-code 0 \
+            --no-progress \
+            .
+
+      - name: Trivy config (IaC) scan
+        run: |
+          trivy config \
+            --severity CRITICAL,HIGH,MEDIUM \
+            --exit-code 0 \
+            .
+
+  secrets-scan:
+    name: Secrets Scan (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
         with:
-          scan-type: fs
-          scan-ref: .
-          format: table
-          severity: CRITICAL,HIGH,MEDIUM
+          fetch-depth: 0
 
-  config-audit:
-    name: Docker Compose & Config Audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Validate docker-compose.yml syntax
-        run: docker compose config --quiet && echo "docker-compose.yml syntax OK"
-
-      - name: Check for secrets in config files
+      - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Run Trivy config scan (IaC)
-        uses: aquasecurity/trivy-action@v0.28.0
-        with:
-          scan-type: config
-          scan-ref: .
-          format: table
-          severity: CRITICAL,HIGH,MEDIUM
-          exit-code: '0'
 
   dependency-audit:
     name: Node.js Dependency Audit
@@ -61,3 +64,6 @@ jobs:
       - name: Full npm audit report
         run: npm audit --audit-level=low || true
         working-directory: src
+
+      - name: Validate docker-compose.yml syntax
+        run: docker compose config --quiet && echo "docker-compose.yml is valid"
